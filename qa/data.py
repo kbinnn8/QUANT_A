@@ -41,3 +41,55 @@ def load_ohlcv(ticker: str, start, end, interval: str = "1d") -> tuple[pd.DataFr
         if not df.empty:
             return df, sym
     return pd.DataFrame(), candidates[0]
+
+
+# ── MT5 匯出的 K 線（檢視 → 商品 → K 線 → 匯出）──
+def _decode(raw: bytes) -> str:
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or (len(raw) > 1 and raw[1:2] == b"\x00"):
+        return raw.decode("utf-16")
+    return raw.decode("utf-8-sig", errors="replace")
+
+
+def timeframe_label(index: pd.DatetimeIndex) -> str:
+    """從 K 棒間隔推算週期（M1 / M5 / M15 / M30 / H1 / H4 / D1 / W1）。"""
+    if len(index) < 3:
+        return "?"
+    step = pd.Series(index).diff().dropna().median()
+    mins = step.total_seconds() / 60
+    for m, name in [(1, "M1"), (5, "M5"), (15, "M15"), (30, "M30"), (60, "H1"), (240, "H4"), (1440, "D1"), (10080, "W1")]:
+        if mins <= m * 1.01:
+            return name
+    return "MN1"
+
+
+def parse_bars(raw: bytes, filename: str = "") -> tuple[pd.DataFrame, str, str]:
+    """讀 MT5 匯出的 K 線 CSV（也接受一般的 Date,Time,Open,High,Low,Close 格式）。
+    回傳（OHLCV, 商品名稱, 週期）。商品名稱取自檔名底線前面那段，例如 EURUSD_H1_….csv → EURUSD。"""
+    import io
+
+    text = _decode(raw)
+    first = text.splitlines()[0] if text else ""
+    sep = "\t" if "\t" in first else ";" if first.count(";") > first.count(",") else ","
+    df = pd.read_csv(io.StringIO(text), sep=sep)
+    df.columns = [str(c).strip().strip("<>").strip().lower() for c in df.columns]
+    if "date" not in df.columns:
+        raise ValueError("找不到日期欄位。請用 MT5「商品 → K 線 → 匯出」產生的檔案。")
+    stamp = df["date"].astype(str) + (" " + df["time"].astype(str) if "time" in df.columns else "")
+    idx = pd.to_datetime(stamp.str.replace(".", "-", regex=False), errors="coerce")
+    need = {"open": "Open", "high": "High", "low": "Low", "close": "Close"}
+    missing = [k for k in need if k not in df.columns]
+    if missing:
+        raise ValueError(f"缺少欄位：{', '.join(missing)}")
+    out = pd.DataFrame({v: pd.to_numeric(df[k], errors="coerce").values for k, v in need.items()}, index=idx)
+    vol = next((c for c in ["tickvol", "vol", "volume"] if c in df.columns), None)
+    out["Volume"] = pd.to_numeric(df[vol], errors="coerce").fillna(0).values if vol else 0.0
+    if "spread" in df.columns:
+        out["Spread"] = pd.to_numeric(df["spread"], errors="coerce").values
+    out = out[out.index.notna()].dropna(subset=["Open", "High", "Low", "Close"])
+    out = out[~out.index.duplicated(keep="last")].sort_index()
+    out.index.name = None
+    if out.empty:
+        raise ValueError("檔案裡沒有可用的 K 線。")
+    stem = filename.rsplit("/", 1)[-1].rsplit("\\", 1)[-1].rsplit(".", 1)[0]
+    symbol = stem.split("_")[0] or "上傳資料"
+    return out, symbol, timeframe_label(out.index)

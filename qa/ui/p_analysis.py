@@ -162,6 +162,17 @@ def trades_tab(run, s):
     c1, c2 = st.columns(2)
     c1.plotly_chart(C.grouped(t, et.dt.weekday, C.WEEKDAYS, "依進場星期：損益合計"), theme=None)
     c2.plotly_chart(C.grouped(t, et.dt.month - 1, [f"{m}月" for m in range(1, 13)], "依進場月份：損益合計"), theme=None)
+    if "商品" in t and t["商品"].nunique() > 1:
+        g = t.groupby("商品")["損益"]
+        gp = g.apply(lambda v: v[v > 0].sum())
+        gl = g.apply(lambda v: -v[v < 0].sum())
+        st.markdown(T.section("依商品"), unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame({"筆數": g.count(), "損益合計": g.sum().map(S.money), "平均損益": g.mean().map(S.money),
+                                   "勝率": g.apply(lambda v: (v > 0).mean()).map(S.pct),
+                                   "獲利因子": (gp / gl.where(gl > 0)).map(S.num)}).sort_values("筆數", ascending=False))
+        st.markdown(T.explain(
+            "一籃子測試時，看優勢是不是「大部分商品都有」。如果只有一兩個商品賺錢、其他都虧，"
+            "比較像是運氣或那個商品剛好的行情，不是策略本身的優勢。"), unsafe_allow_html=True)
     if "出場原因" in t and t["出場原因"].notna().any():
         g = t.groupby("出場原因")["損益"]
         st.markdown(T.section("依出場原因"), unsafe_allow_html=True)

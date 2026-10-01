@@ -1,3 +1,7 @@
+[global]
+# app.py 會重新存快速測試的設定（換頁不重設），這會觸發「同時有預設值和 Session State」的提示，關掉它
+disableWidgetStateDuplicationWarning = true
+
 [theme]
 base = "dark"
 primaryColor = "#2962ff"

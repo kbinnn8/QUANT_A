@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import datetime as dt
 
+import pandas as pd
 import streamlit as st
 
-from .. import engine
+from .. import basket, engine
 from .. import runs as R
-from ..data import INTERVAL_LIMIT_DAYS, load_ohlcv
+from ..data import INTERVAL_LIMIT_DAYS, load_ohlcv, parse_bars
 from ..templates import TEMPLATES, load
 from . import state as S
 from . import theme as T
@@ -15,7 +16,19 @@ from . import theme as T
 INTERVALS = {"日線": "1d", "1 小時": "1h", "30 分": "30m", "15 分": "15m", "5 分": "5m", "週線": "1wk"}
 SYMBOLS = {"EUR/USD": "EURUSD=X", "GBP/USD": "GBPUSD=X", "USD/JPY": "USDJPY=X", "AUD/USD": "AUDUSD=X",
            "黃金（期貨）": "GC=F", "S&P 500": "^GSPC", "SPY": "SPY", "台積電": "2330", "BTC/USD": "BTC-USD"}
+BASKET = "外匯一籃子（7 對）"
+UPLOAD = "上傳 MT5 K 線…"
+FX7 = {"EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "USDJPY=X", "AUDUSD": "AUDUSD=X",
+       "USDCAD": "USDCAD=X", "USDCHF": "USDCHF=X", "NZDUSD": "NZDUSD=X"}
 MY = "我的策略（上傳）"
+
+BARS_HELP = """**從 MT5 匯出 K 線（XM 通常有 10 年以上的 H1）**
+
+1. MT5 按 `Ctrl + U` 開「商品」視窗 → 上方選「K 線」分頁
+2. 選商品（例如 EURUSD）、週期（例如 H1）、日期範圍（例如 2015-01-01 到今天）→ 按「請求」
+3. 按「匯出 K 線」存成 .csv，檔名保留預設（開頭是商品名稱，例如 `EURUSD_H1_….csv`）
+4. 一次可以上傳好幾個商品：會變成一籃子，每個商品各跑一次再合起來
+"""
 
 API = """
 ```python
@@ -71,11 +84,15 @@ def render():
         c1, c2, c3, c4 = st.columns([2, 2, 1, 1])
         names = list(TEMPLATES) + ([MY] if MY in codes else [])
         tpl = c1.selectbox("策略", names, key="qt_tpl")
-        sym_name = c2.selectbox("標的", list(SYMBOLS) + ["自訂…"], key="qt_sym")
-        iv = c3.selectbox("週期", list(INTERVALS), key="qt_iv")
-        years = c4.selectbox("期間", ["1 年", "2 年", "5 年", "10 年"], index=2, key="qt_years")
-        symbol = SYMBOLS.get(sym_name) or st.text_input("自訂代號（Yahoo 格式）", "EURUSD=X", key="qt_custom",
-                                                         help="外匯 EURUSD=X、期貨 GC=F、台股 2330、美股 SPY")
+        sym_name = c2.selectbox("標的", list(SYMBOLS) + [BASKET, UPLOAD, "自訂…"], key="qt_sym")
+        uploaded = sym_name == UPLOAD
+        iv = c3.selectbox("週期", list(INTERVALS), key="qt_iv", disabled=uploaded)
+        years = c4.selectbox("期間", ["1 年", "2 年", "5 年", "10 年"], index=2, key="qt_years", disabled=uploaded)
+        symbol = SYMBOLS.get(sym_name) or (sym_name if sym_name in (BASKET, UPLOAD) else
+                                           st.text_input("自訂代號（Yahoo 格式）", "EURUSD=X", key="qt_custom",
+                                                         help="外匯 EURUSD=X、期貨 GC=F、台股 2330、美股 SPY"))
+        if uploaded:
+            bars_range = _upload_panel()
         c1, c2, c3, c4 = st.columns(4)
         cash = c1.number_input("初始資金", min_value=1000.0, value=10_000.0, step=1000.0, format="%.0f", key="qt_cash")
         size = c2.number_input("部位（淨值比例）", min_value=0.01, value=1.0, step=0.1, format="%g", key="qt_size",
@@ -86,7 +103,7 @@ def render():
 
     interval = INTERVALS[iv]
     start = today - dt.timedelta(days=int(years.split()[0]) * 365)
-    if interval in INTERVAL_LIMIT_DAYS:
+    if interval in INTERVAL_LIMIT_DAYS and not uploaded:
         st.caption(f"Yahoo 的{iv}最多只有約 {INTERVAL_LIMIT_DAYS[interval]} 天歷史，會自動縮短。"
                    "長期的分鐘資料之後會改用 MT5 匯出。")
 
@@ -141,12 +158,15 @@ def render():
 
     if start_clicked or exp_clicked:
         try:
-            data, used = cached_ohlcv(symbol, start, today + dt.timedelta(days=1), interval)
+            if uploaded:
+                datasets, used, tf_label, period = _uploaded_datasets(bars_range)
+            else:
+                datasets, used, tf_label, period = _yahoo_datasets(symbol, start, today, interval, iv, years)
         except Exception as e:
-            st.error(f"資料下載失敗：{e}")
+            st.error(f"資料準備失敗：{e}")
             return
-        if data.empty:
-            st.error(f"抓不到 {symbol} 的{iv}資料。")
+        if not datasets:
+            st.error("沒有可用的 K 線資料。" + ("請先上傳 MT5 匯出的 K 線檔。" if uploaded else f"抓不到 {symbol} 的{iv}資料。"))
             return
         opts = dict(slippage_bps=slip, sizing_mode="淨值比例", sizing_value=size, lot_size=0)
         variants = [{**params, **ov} for ov in experiment] if exp_clicked else [params]
@@ -154,10 +174,14 @@ def render():
         try:
             with st.spinner("回測中…" if len(variants) == 1 else f"對照實驗：共 {len(variants)} 組，回測中…"):
                 for p in variants:
-                    res = engine.run(cls, data, p, cash, comm, **opts)
-                    res["lookahead"] = engine.lookahead_check(cls, data, p, cash, comm, **opts)
-                    run = R.from_engine(res, cls.__name__, used, iv, name=_run_name(cls, p, used, iv))
-                    run.settings = {**run.settings, "期間": years}
+                    if len(datasets) == 1:
+                        data = next(iter(datasets.values()))
+                        res = engine.run(cls, data, p, cash, comm, **opts)
+                        res["lookahead"] = engine.lookahead_check(cls, data, p, cash, comm, **opts)
+                    else:
+                        res = basket.run(cls, datasets, p, cash, comm, **opts)
+                    run = R.from_engine(res, cls.__name__, used, tf_label, name=_run_name(cls, p, used, tf_label))
+                    run.settings = {**run.settings, "期間": period, "資料來源": "MT5 匯出" if uploaded else "Yahoo"}
                     S.add_run(run)
                     ids.append(run.id)
         except engine.StrategyError as e:
@@ -193,6 +217,78 @@ def render():
                            mime="application/json", key="qt_dl")
         st.markdown('<div class="hint">這筆結果已加入「研究紀錄」（這次連線有效）。想永久保存，可以下載後交給我放進 repo 的 runs/ 資料夾。</div>',
                     unsafe_allow_html=True)
+
+
+# ── 資料來源 ──
+def _yahoo_datasets(symbol, start, today, interval, iv, years):
+    end = today + dt.timedelta(days=1)
+    if symbol == BASKET:
+        out = {}
+        for name, tk in FX7.items():
+            df, _ = cached_ohlcv(tk, start, end, interval)
+            if not df.empty:
+                out[name] = df
+        return out, f"外匯 {len(out)} 對", iv, years
+    df, used = cached_ohlcv(symbol, start, end, interval)
+    return ({used: df} if not df.empty else {}), used, iv, years
+
+
+def _on_bars_upload():
+    files = st.session_state.get("qt_bars_up") or []
+    store = st.session_state.setdefault("qt_bars", {})
+    errors = []
+    for f in files:
+        try:
+            df, sym, tf = parse_bars(f.getvalue(), f.name)
+            store[f"{sym} {tf}"] = dict(df=df, symbol=sym, tf=tf, file=f.name)
+        except Exception as e:
+            errors.append(f"{f.name}：{e}")
+    st.session_state["qt_bars_err"] = errors
+
+
+def _upload_panel():
+    store = st.session_state.setdefault("qt_bars", {})
+    with st.expander("怎麼從 MT5 匯出 K 線", expanded=not store):
+        st.markdown(BARS_HELP)
+    st.file_uploader("上傳 MT5 K 線（.csv，可多選）", type=["csv", "txt"], accept_multiple_files=True,
+                     key="qt_bars_up", on_change=_on_bars_upload)
+    for err in st.session_state.get("qt_bars_err", []):
+        st.error(err)
+    if not store:
+        return None
+    lo = min(v["df"].index[0] for v in store.values()).date()
+    hi = max(v["df"].index[-1] for v in store.values()).date()
+    st.markdown(T.chips([f"{k} · {v['df'].index[0]:%Y-%m-%d} → {v['df'].index[-1]:%Y-%m-%d} · {len(v['df']):,} 根"
+                         for k, v in store.items()]), unsafe_allow_html=True)
+    c1, c2 = st.columns([3, 1])
+    rng = c1.date_input("測試期間（樣本內 / 樣本外可以在這裡切）", value=(lo, hi), min_value=lo, max_value=hi,
+                        key="qt_bars_range")
+    if c2.button("清除已上傳", key="qt_bars_clear"):
+        st.session_state["qt_bars"] = {}
+        st.session_state.pop("qt_bars_range", None)
+        st.rerun()
+    return rng
+
+
+def _uploaded_datasets(rng):
+    store = st.session_state.get("qt_bars", {})
+    if not store:
+        return {}, UPLOAD, "?", ""
+    if isinstance(rng, (list, tuple)) and len(rng) == 2:
+        a, b = pd.Timestamp(rng[0]), pd.Timestamp(rng[1]) + pd.Timedelta(days=1)
+    else:
+        a, b = pd.Timestamp.min, pd.Timestamp.max
+    out = {}
+    for v in store.values():
+        df = v["df"][(v["df"].index >= a) & (v["df"].index < b)]
+        if len(df) > 100:
+            out[v["symbol"] if list(s["symbol"] for s in store.values()).count(v["symbol"]) == 1
+                else f"{v['symbol']} {v['tf']}"] = df
+    tfs = {v["tf"] for v in store.values()}
+    tf = tfs.pop() if len(tfs) == 1 else "混合週期"
+    used = next(iter(out)) if len(out) == 1 else f"MT5 {len(out)} 個商品"
+    period = f"{a:%Y-%m-%d} → {(b - pd.Timedelta(days=1)):%Y-%m-%d}" if a != pd.Timestamp.min else "全部"
+    return out, used, tf, period
 
 
 def _run_name(cls, params, symbol, iv) -> str:

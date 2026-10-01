@@ -36,7 +36,7 @@ def password_gate():
 password_gate()
 
 # 換頁時 Streamlit 會清掉沒顯示的元件值；把快速測試的設定重新存一次，回來時參數不會被重設
-_KEEP = ("qt_tpl", "qt_sym", "qt_iv", "qt_years", "qt_custom", "qt_cash", "qt_size", "qt_comm", "qt_slip", "qt_p::")
+_KEEP = ("qt_tpl", "qt_sym", "qt_iv", "qt_years", "qt_custom", "qt_cash", "qt_size", "qt_comm", "qt_slip", "qt_bars_range", "qt_p::")
 for _k in [k for k in st.session_state if isinstance(k, str) and k.startswith(_KEEP)]:
     st.session_state[_k] = st.session_state[_k]
 
