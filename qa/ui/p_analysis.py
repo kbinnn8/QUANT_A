@@ -15,7 +15,7 @@ def render():
     lib = S.library()
     if not lib:
         st.markdown(T.header("回測分析"), unsafe_allow_html=True)
-        st.markdown(T.empty("還沒有回測可以分析", "先到「快速測試」跑一個，或在「研究紀錄」上傳。"), unsafe_allow_html=True)
+        st.markdown(T.empty("還沒有回測可以分析", "在 MT5 跑一次單次測試，或在「研究紀錄」上傳 .json 紀錄檔。"), unsafe_allow_html=True)
         return
     ids = list(lib)
     active = st.session_state.get("active_run")
@@ -27,9 +27,11 @@ def render():
     s = S.stats_of(run)
 
     st.markdown(T.header(run.name, tag="MT5" if run.source == "mt5" else "Python"), unsafe_allow_html=True)
-    st.markdown(T.chips([(("MT5" if run.source == "mt5" else "Python 快速測試"), f"src-{run.source}"),
+    st.markdown(T.chips([(("MT5" if run.source == "mt5" else "Python"), f"src-{run.source}"),
                          run.ea, run.symbol, run.timeframe, run.period, f"{s.get('K棒數', len(run.equity)):,} 根 K 棒"] +
                         [f"{k}={v}" for k, v in run.params.items()]), unsafe_allow_html=True)
+    if run.note:
+        st.markdown(f'<div class="hint"><b>備註</b>：{T.esc(run.note)}</div>', unsafe_allow_html=True)
     if run.lookahead is not None:
         ok, bad = run.lookahead
         st.markdown(T.status("ok", "前視偏差檢查通過：截斷未來資料重跑，每一根的下單都相同") if ok else

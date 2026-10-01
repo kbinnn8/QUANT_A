@@ -60,6 +60,7 @@ input bool   InpAllowShort    = true;     // 允許做空
 input group "=== 其他 ==="
 input bool   InpEnableTrading = false;    // 實盤自動下單（策略測試器中一律下單）
 input ulong  InpMagic         = 20261002; // EA 識別碼
+input string InpNote          = "";       // 備註：這次改了什麼（會顯示在研究紀錄）
 
 CTrade   trade;
 int      hAO  = INVALID_HANDLE;
@@ -100,6 +101,7 @@ int OnInit()
 
    QA_Init("AO_Div_RSI");                 // ★ QUANT_A：登記參數（名稱和 Python 版一樣）
    QA_Variant(ModeLabel());
+   QA_Note(InpNote);
    QA_Param("entry_mode", (int)InpEntryMode);
    QA_Param("random_prob", InpRandomProb);
    QA_Param("seed", InpSeed);

@@ -9,8 +9,8 @@ FLOW = """
 ### 研究流程
 
 1. **先寫下假設**：你認為市場有什麼規律？為什麼會有這個規律？沒有假設的策略，通常只是在歷史資料上湊出來的
-2. **快速測試**：用 Python 引擎幾分鐘內跑完，看值不值得繼續。大部分想法在這一步就該淘汰
-3. **寫成 EA，在 MT5 回測**：用 XM 的真實報價驗證，結果會透過上傳小工具自動出現在「研究紀錄」
+2. **寫成 EA，在 MT5 回測**：用 XM 的真實報價驗證，結果會透過上傳小工具自動出現在「研究紀錄」
+3. **改良一次、跑一次**：每次只改一件事，在 EA 的「備註」參數寫下改了什麼，到「改良對比」看是不是真的變好
 4. **對照實驗**：同樣的出場規則，把進場換成「拿掉某個條件」和「隨機進場」各跑一次。
    你的策略要明顯贏過隨機進場，才代表進場訊號真的有用；跟隨機差不多，再漂亮也只是運氣
 5. **樣本內 / 樣本外**：只用前段資料（例如 2015–2021）調參數，後段（2022 之後）只測一次，不准回頭改
@@ -21,31 +21,18 @@ FLOW = """
 每一步都可能回到第 1 步。**果斷放棄一個想法，本身就是很重要的能力。**
 """
 
-API = """
-### 快速測試的策略寫法
+MT5 = """
+### MT5 怎麼接
 
-```python
-class MyStrategy(Strategy):
-    params = {"n": 20, "sl_pct": 0.02}      # 可調參數
+1. EA 開頭 `#include <QuantA_Export.mqh>`，`OnInit` 呼叫 `QA_Init("EA 名稱")` 和 `QA_Param(...)` 登記參數，
+   `OnTick` 第一行呼叫 `QA_OnTick()`，`OnTester` 呼叫 `QA_Export()`（現有的 EA 都已經接好）
+2. 想讓紀錄寫上「這次改了什麼」：在 EA 的 **備註** 參數（InpNote）填一句話，例如「加了 H4 趨勢過濾」
+3. 在策略測試器跑 **單次測試**（最佳化不會輸出），結束時 EA 會把結果寫到 MT5 的共用資料夾
+4. 開著上傳小工具（start_uploader.bat），它會把結果送到 GitHub，幾分鐘內就出現在「研究紀錄」
 
-    def init(self):                          # 只跑一次：先算指標
-        self.ma = self.I(ta.sma(self.close, self.p.n), "MA")
+**改良前後對比**：同一個商品、同一段期間，改良前跑一次、改良後跑一次，在「研究紀錄」勾這兩筆按「改良對比」。
 
-    def next(self):                          # 每根 K 棒收盤後跑一次
-        i = self.i
-        if self.is_flat and self.close[i] > self.ma[i]:
-            self.buy(sl_pct=self.p.sl_pct)   # 下一根開盤成交
-        elif self.is_long and self.close[i] < self.ma[i]:
-            self.close_position("跌破均線")
-```
-
-- **資料**：`self.open` `self.high` `self.low` `self.close` `self.volume`、`self.i`、`self.time`、`self.p.參數名`
-- **下單**（下一根開盤成交）：`self.buy(size=None, sl=, tp=, sl_pct=, tp_pct=, tag=)`、`self.sell(...)`、
-  `self.close_position()`、`self.set_sl(價格)`、`self.set_tp(價格)`、`self.log(...)`
-- **狀態**：`self.is_flat` `self.is_long` `self.is_short` `self.entry_price` `self.bars_in_trade` `self.equity`
-- **指標**（`ta.`）：`sma` `ema` `rsi` `macd` `bollinger` `atr` `highest` `lowest` `stdev` `roc` `zscore` `shift`、
-  `ta.crossover(a, b, i)` / `ta.crossunder(a, b, i)`
-- **成交規則**：停損停利用最高 / 最低價判斷，跳空以開盤價成交；同一根同時碰到停損和停利，保守假設先停損
+**對照實驗**：EA 的「進場模式」參數依序切換各跑一次，在「研究紀錄」勾選全部按「多筆比較」。
 """
 
 GLOSSARY = """
@@ -67,16 +54,18 @@ GLOSSARY = """
 | SQN | 交易品質分數（Van Tharp） | > 2 不錯 |
 | PSR | 真實 Sharpe > 0 的機率 | 只看單次結果 |
 | DSR | 把「試了幾次」考慮進去後的 PSR | > 95% 才算有說服力 |
-| 前視偏差 | 回測時不小心用到未來的資料 | 一定要避免；app 會自動檢查 |
+| 前視偏差 | 回測時不小心用到未來的資料 | 一定要避免 |
+| 置換檢定 | 隨機拿掉同樣多筆交易，看結果會不會一樣好 | 過濾條件要好過隨機，機率 < 5% 才算有用 |
+| Bootstrap | 把交易重新抽樣很多次，看差異會不會消失 | 新版較好的機率 > 95% 才算有把握 |
 """
 
 
 def render():
-    st.markdown(T.header("說明", "研究流程、策略寫法、報告裡的名詞。"), unsafe_allow_html=True)
-    t1, t2, t3 = st.tabs(["研究流程", "策略寫法", "名詞解釋"])
+    st.markdown(T.header("說明", "研究流程、MT5 怎麼接、報告裡的名詞。"), unsafe_allow_html=True)
+    t1, t2, t3 = st.tabs(["研究流程", "MT5 怎麼接", "名詞解釋"])
     with t1:
         st.markdown(FLOW)
     with t2:
-        st.markdown(API)
+        st.markdown(MT5)
     with t3:
         st.markdown(GLOSSARY)

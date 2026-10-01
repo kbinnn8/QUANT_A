@@ -1,4 +1,4 @@
-"""QUANT_A：和 Claude 一起研究 MT5 EA。
+"""QUANT_A：MT5 EA 的研究紀錄、改良前後對比與視覺化（回測在 MT5 跑）。
 
 本機執行：streamlit run app.py
 """
@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from qa.ui import p_analysis, p_chart, p_compare, p_docs, p_quick, p_runs
+from qa.ui import p_analysis, p_chart, p_compare, p_docs, p_improve, p_runs
 from qa.ui import state as S
 from qa.ui import theme as T
 
@@ -16,7 +16,7 @@ st.markdown(T.CSS, unsafe_allow_html=True)
 
 
 def password_gate():
-    """在 Streamlit 的 Secrets 設定 APP_PASSWORD 就會要求密碼（快速測試會在伺服器上執行程式碼）。"""
+    """在 Streamlit 的 Secrets 設定 APP_PASSWORD 就會要求密碼（回測紀錄屬於私人資料）。"""
     try:
         pw = st.secrets.get("APP_PASSWORD")
     except Exception:
@@ -35,16 +35,11 @@ def password_gate():
 
 password_gate()
 
-# 換頁時 Streamlit 會清掉沒顯示的元件值；把快速測試的設定重新存一次，回來時參數不會被重設
-_KEEP = ("qt_tpl", "qt_sym", "qt_iv", "qt_years", "qt_custom", "qt_cash", "qt_size", "qt_comm", "qt_slip", "qt_bars_range", "qt_p::")
-for _k in [k for k in st.session_state if isinstance(k, str) and k.startswith(_KEEP)]:
-    st.session_state[_k] = st.session_state[_k]
-
 pages = {
     "研究紀錄": st.Page(p_runs.render, title="研究紀錄", icon=":material/list_alt:", url_path="runs", default=True),
     "回測分析": st.Page(p_analysis.render, title="回測分析", icon=":material/insights:", url_path="analysis"),
-    "比較": st.Page(p_compare.render, title="比較", icon=":material/compare_arrows:", url_path="compare"),
-    "快速測試": st.Page(p_quick.render, title="快速測試", icon=":material/bolt:", url_path="quick"),
+    "改良對比": st.Page(p_improve.render, title="改良對比", icon=":material/difference:", url_path="improve"),
+    "比較": st.Page(p_compare.render, title="多筆比較", icon=":material/compare_arrows:", url_path="compare"),
     "圖表": st.Page(p_chart.render, title="圖表", icon=":material/candlestick_chart:", url_path="chart"),
     "說明": st.Page(p_docs.render, title="說明", icon=":material/menu_book:", url_path="docs"),
 }

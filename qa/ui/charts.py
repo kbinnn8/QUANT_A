@@ -252,3 +252,65 @@ def compare_dd(runs_: list, height=260):
         fig.add_trace(go.Scatter(x=dd.index, y=dd, name=r.name, line=dict(color=color, width=1.4)))
     fig.update_yaxes(tickformat=".0%")
     return T.style(fig, height, "回撤比較")
+
+
+# ── 改良前後對比 ──
+def waterfall(steps: list[tuple[str, float]], height=340):
+    """steps：[(名稱, 金額)]，第一和最後是總額，中間是變化。"""
+    measure = ["absolute"] + ["relative"] * (len(steps) - 2) + ["total"]
+    fig = go.Figure(go.Waterfall(
+        x=[s[0] for s in steps], y=[s[1] for s in steps], measure=measure,
+        text=[f"{s[1]:+,.0f}" if 0 < k < len(steps) - 1 else f"{s[1]:,.0f}" for k, s in enumerate(steps)],
+        textposition="outside", textfont=dict(color=T.TEXT, family="JetBrains Mono, monospace", size=11),
+        connector=dict(line=dict(color=T.BORDER, width=1)),
+        increasing=dict(marker=dict(color=T.UP)), decreasing=dict(marker=dict(color=T.DOWN)),
+        totals=dict(marker=dict(color=T.ACCENT)),
+        hovertemplate="%{x}：%{y:,.0f}<extra></extra>"))
+    fig = T.style(fig, height, "淨利的變化從哪裡來", legend=False)
+    fig.update_layout(hovermode="closest")
+    fig.update_yaxes(tickformat=",.0f")
+    return fig
+
+
+def yearly_compare(old_y, new_y, names, height=320):
+    years = sorted(set(old_y.index) | set(new_y.index))
+    fig = go.Figure()
+    for ys, name, color in [(old_y, names[0], T.MUTED), (new_y, names[1], T.ACCENT)]:
+        v = ys.reindex(years).fillna(0)
+        fig.add_trace(go.Bar(x=[str(y) for y in years], y=v, name=name, marker_color=color, marker_line_width=0,
+                             hovertemplate=name + "：%{y:,.0f}<extra></extra>"))
+    fig = T.style(fig, height, "每年損益")
+    fig.update_layout(barmode="group", bargap=0.25, bargroupgap=0.06)
+    fig.update_yaxes(tickformat=",.0f")
+    return fig
+
+
+def dist_compare(old_r, new_r, names, height=320):
+    fig = go.Figure()
+    for r, name, color in [(old_r, names[0], T.MUTED), (new_r, names[1], T.ACCENT)]:
+        fig.add_trace(go.Histogram(x=np.asarray(r) * 100, name=name, nbinsx=40, marker_color=color, opacity=0.6,
+                                   histnorm="percent", marker_line_width=0,
+                                   hovertemplate=name + "：%{x:.2f}% → %{y:.1f}% 的單<extra></extra>"))
+    fig.add_vline(x=0, line_color=T.MUTED, line_dash="dash")
+    fig.update_xaxes(title_text="每筆佔帳戶的報酬（%）")
+    fig.update_yaxes(title_text="佔全部交易 %")
+    fig = T.style(fig, height, "每筆報酬分布")
+    fig.update_layout(barmode="overlay", hovermode="closest", bargap=0.04)
+    return fig
+
+
+def evolution(df, metric, fmt, height=320):
+    """df：同一個 EA 的多次回測（時間, 數值, 標的, 名稱, 備註）。"""
+    fig = go.Figure()
+    for k, (sym, g) in enumerate(df.groupby("標的")):
+        g = g.sort_values("時間")
+        fig.add_trace(go.Scatter(
+            x=g["時間"], y=g["值"], name=str(sym), mode="lines+markers",
+            line=dict(color=T.SERIES[k % len(T.SERIES)], width=1.6), marker=dict(size=8),
+            customdata=np.stack([g["名稱"], g["備註"]], axis=1),
+            hovertemplate="%{customdata[0]}<br>" + metric + "：%{y}<br>%{customdata[1]}<extra></extra>"))
+    if fmt == "pct":
+        fig.update_yaxes(tickformat=".1%")
+    fig = T.style(fig, height, f"{metric} 隨版本變化")
+    fig.update_layout(hovermode="closest")
+    return fig

@@ -1,6 +1,4 @@
 streamlit>=1.46
-streamlit-ace
-yfinance
 pandas>=2.0
 numpy
 plotly>=5.18

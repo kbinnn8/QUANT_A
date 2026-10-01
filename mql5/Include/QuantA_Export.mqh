@@ -22,6 +22,7 @@ input bool QA_ExportEnabled = true;   // QuantA：回測結束時輸出結果
 
 //--- 狀態
 string   qa_ea_name    = "";
+string   qa_note       = "";   // 選用：這次改了什麼（會顯示在研究紀錄、改良對比）
 string   qa_variant    = "";   // 選用：模式標籤，會顯示在紀錄名稱（例如對照實驗的各組）
 double   qa_init_cash  = 0.0;
 bool     qa_inited     = false;
@@ -120,6 +121,7 @@ void QA_Init(string ea_name = "")
    qa_last_bar  = 0;
    qa_exported  = false;
    qa_variant   = "";
+   qa_note      = "";
    ArrayResize(qa_eq_t, 0, 100000);
    ArrayResize(qa_eq_v, 0, 100000);
    ArrayResize(qa_bal_v, 0, 100000);
@@ -130,6 +132,11 @@ void QA_Init(string ea_name = "")
 //| 選用：在 QA_Init 之後呼叫，紀錄名稱會變成「EA [標籤] · 商品 · 週期」         |
 //+------------------------------------------------------------------+
 void QA_Variant(string label) { qa_variant = label; }
+
+//+------------------------------------------------------------------+
+//| 選用：在 QA_Init 之後呼叫，寫下這次改了什麼（例如「加了 H4 趨勢過濾」）      |
+//+------------------------------------------------------------------+
+void QA_Note(string note) { qa_note = note; }
 
 //+------------------------------------------------------------------+
 //| 每個 tick：在 OnTick() 第一行呼叫（每根新 K 棒記一次淨值）              |
@@ -379,6 +386,7 @@ bool QA_Export()
    FileWriteString(h, ", \"symbol\": " + QA_Str(_Symbol) + ", \"timeframe\": " + QA_Str(QA_TF()));
    FileWriteString(h, ", \"cash\": " + QA_Num(qa_init_cash));
    FileWriteString(h, ", \"params\": {" + qa_params + "}");
+   FileWriteString(h, ", \"note\": " + QA_Str(qa_note));
 
    string settings = "\"公司\": " + QA_Str(AccountInfoString(ACCOUNT_COMPANY));
    settings += ", \"伺服器\": " + QA_Str(AccountInfoString(ACCOUNT_SERVER));

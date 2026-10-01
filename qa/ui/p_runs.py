@@ -7,12 +7,13 @@ import streamlit as st
 
 from .. import report, robust
 from .. import runs as R
+from . import charts as C
 from . import state as S
 from . import theme as T
 
 
 def render():
-    st.markdown(T.header("研究紀錄", "每一次回測都會留在這裡：MT5 的結果會自動出現，快速測試的結果也會加進來。"),
+    st.markdown(T.header("研究紀錄", "每一次 MT5 回測都會自動留在這裡：EA 改了什麼、結果變好還是變差，一目了然。"),
                 unsafe_allow_html=True)
     lib = S.library()
 
@@ -35,10 +36,8 @@ def render():
 
     if not lib:
         st.markdown(T.empty("還沒有任何回測紀錄",
-                            "到「快速測試」跑一個策略，或上傳回測紀錄檔。MT5 的自動上傳接好之後，結果也會出現在這裡。"),
+                            "在 MT5 策略測試器跑一次（單次測試），上傳小工具會自動把結果送到這裡。也可以手動上傳 .json 紀錄檔。"),
                     unsafe_allow_html=True)
-        if st.button("前往快速測試", type="primary"):
-            S.go("快速測試")
         return
 
     rows = []
@@ -48,6 +47,7 @@ def render():
                      "EA": r.ea, "標的": r.symbol, "週期": r.timeframe, "期間": r.period,
                      "淨利": s.get("淨利"), "總報酬": s.get("總報酬"), "Sharpe": s.get("Sharpe"), "最大回撤": s.get("最大回撤"),
                      "獲利因子": s.get("獲利因子"), "交易數": s.get("交易次數", 0),
+                     "備註": r.note or "",
                      "參數": ", ".join(f"{k}={v}" for k, v in r.params.items()),
                      "保存": "永久" if r.persisted else "這次連線"})
     df = pd.DataFrame(rows)
@@ -82,16 +82,20 @@ def render():
     event = st.dataframe(show, hide_index=True, on_select="rerun", selection_mode="multi-row", key="runs_table")
     picked = [view["id"].iloc[i] for i in (event.selection.rows if event and event.selection else [])]
 
-    c1, c2, c3 = st.columns([1, 1, 2])
+    c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
     if c1.button("分析", type="primary", disabled=len(picked) != 1, help="勾選一筆後按這裡"):
         S.open_run(picked[0])
-    if c2.button("比較", disabled=len(picked) < 2, help="勾選 2–8 筆後按這裡"):
+    if c2.button("改良對比", disabled=len(picked) != 2, help="勾選兩筆：較早的當舊版、較新的當新版"):
+        pair = sorted(picked, key=lambda i: lib[i].created)
+        S.improve(pair[0], pair[1])
+    if c3.button("多筆比較", disabled=len(picked) < 2, help="勾選 2–8 筆後按這裡"):
         S.compare(picked[:8])
     if picked and len(picked) == 1:
         r = lib[picked[0]]
-        c3.download_button("下載這筆紀錄（.json）", r.to_json().encode("utf-8"), file_name=f"{r.id}.json",
+        c4.download_button("下載這筆紀錄（.json）", r.to_json().encode("utf-8"), file_name=f"{r.id}.json",
                            mime="application/json")
-    st.markdown('<div class="hint">在表格左側勾選：勾一筆可以分析，勾兩筆以上可以比較。</div>', unsafe_allow_html=True)
+    st.markdown('<div class="hint">在表格左側勾選：勾一筆可以分析；勾兩筆可以做改良前後對比；勾更多筆可以並排比較。</div>',
+                unsafe_allow_html=True)
 
     # ── 依 EA 統計：試了幾次 ──
     st.markdown(T.section("依 EA 統計"), unsafe_allow_html=True)
@@ -113,3 +117,29 @@ def render():
         "同一個 EA 試越多次，「最好的那次」就越可能只是運氣。<b>PSR</b> 是只看最佳那次時，它的真實 Sharpe 大於 0 的機率；"
         "<b>DSR</b>（Deflated Sharpe Ratio）把「試了幾次」考慮進去後的機率。兩者差很多，代表好結果有不少是試出來的。"
         "一般會希望 DSR 超過 95% 才算有說服力。"), unsafe_allow_html=True)
+
+    # ── 版本演進：同一個 EA 一路改下來，數字怎麼變 ──
+    st.markdown(T.section("版本演進"), unsafe_allow_html=True)
+    c1, c2 = st.columns([2, 2])
+    eas = sorted(df["EA"].unique())
+    ea_one = c1.selectbox("EA", eas, key="evo_ea")
+    metric = c2.selectbox("指標", list(EVO_METRICS), key="evo_metric")
+    key, fmt = EVO_METRICS[metric]
+    g = df[df["EA"] == ea_one].copy()
+    if len(g) < 2:
+        st.markdown('<div class="hint">這個 EA 目前只有一筆紀錄。每改一次就在 MT5 再跑一次，這裡會畫出一路的變化。</div>',
+                    unsafe_allow_html=True)
+    else:
+        g["值"] = [S.stats_of(lib[i]).get(key) for i in g["id"]]
+        g["名稱"] = [lib[i].name for i in g["id"]]
+        g["時間"] = pd.to_datetime(g["時間"])
+        st.plotly_chart(C.evolution(g, metric, fmt), theme=None)
+        st.markdown(T.explain(
+            "每個點是一次回測，依時間排列，滑鼠移上去可以看名稱和備註。不同顏色是不同商品。"
+            "只有在<b>同一個商品、同一段期間</b>上比較才有意義；某一次突然特別好，先到「改良對比」確認是不是運氣。"),
+            unsafe_allow_html=True)
+
+
+EVO_METRICS = {"獲利因子": ("獲利因子", "num"), "淨利": ("淨利", "money"), "最大回撤": ("最大回撤", "pct"),
+               "Sharpe": ("Sharpe", "num"), "勝率": ("勝率", "pct"), "交易次數": ("交易次數", "int"),
+               "每筆期望收益": ("期望收益", "money")}

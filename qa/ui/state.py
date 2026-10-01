@@ -36,7 +36,7 @@ def _repo_runs_json() -> list[str]:
 
 
 def library() -> dict[str, R.Run]:
-    """全部回測：repo 裡永久保存的 + 這次連線新增的（快速測試 / 上傳）。新的在前。"""
+    """全部回測：repo 裡永久保存的 + 這次連線新增的（手動上傳）。新的在前。"""
     lib = {}
     for text in _repo_runs_json():
         try:
@@ -68,6 +68,13 @@ def open_run(run_id: str):
 def compare(run_ids: list[str]):
     st.session_state["compare_ids"] = list(run_ids)
     go("比較")
+
+
+def improve(old_id: str, new_id: str):
+    st.session_state["improve_ids"] = [old_id, new_id]
+    st.session_state.pop("imp_old", None)
+    st.session_state.pop("imp_new", None)
+    go("改良對比")
 
 
 def go(page: str):

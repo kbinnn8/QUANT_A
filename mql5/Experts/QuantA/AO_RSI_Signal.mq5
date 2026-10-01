@@ -33,6 +33,7 @@ input int    StopLossPts    = 300;        // 停損（點，0 = 不設）
 input int    TakeProfitPts  = 600;        // 停利（點，0 = 不設）
 input bool   CloseOpposite  = true;       // 反向訊號時平掉相反部位
 input ulong  MagicNumber    = 20261001;   // 魔術號碼
+input string InpNote        = "";         // 備註：這次改了什麼（會顯示在研究紀錄）
 
 input group "=== 通知 ==="
 input bool EnableAlert = true;            // 彈出 Alert
@@ -60,6 +61,7 @@ int OnInit()
 
    // ★ QUANT_A：登記 EA 名稱與參數（列舉用文字記錄，比較好讀）
    QA_Init("AO_RSI_Signal");
+   QA_Note(InpNote);
    QA_Param("AO_Mode", EnumToString(AO_Mode));
    QA_Param("RSI_Period", RSI_Period);
    QA_Param("RSI_Price", EnumToString(RSI_Price));

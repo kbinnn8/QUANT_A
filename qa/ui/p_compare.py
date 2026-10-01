@@ -18,10 +18,10 @@ METRICS = [  # (名稱, key, 格式, 越大越好?)
 
 
 def render():
-    st.markdown(T.header("比較", "改參數前後、換商品、換時段，差在哪裡一眼看出來。"), unsafe_allow_html=True)
+    st.markdown(T.header("多筆比較", "對照實驗、換商品、換參數：多筆回測並排，差在哪裡一眼看出來。"), unsafe_allow_html=True)
     lib = S.library()
     if len(lib) < 2:
-        st.markdown(T.empty("至少需要兩筆回測", "先到「快速測試」多跑幾次，或等 MT5 的結果上傳。"), unsafe_allow_html=True)
+        st.markdown(T.empty("至少需要兩筆回測", "在 MT5 多跑幾次，結果上傳後就能並排比較。"), unsafe_allow_html=True)
         return
     default = [i for i in st.session_state.get("compare_ids", []) if i in lib] or list(lib)[:2]
     ids = st.multiselect("選擇要比較的回測（最多 8 筆）", list(lib), default=default, max_selections=8,
