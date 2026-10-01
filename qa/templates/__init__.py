@@ -4,6 +4,7 @@ from pathlib import Path
 _DIR = Path(__file__).parent
 TEMPLATES = {
     "AO 背離 + RSI 極端": "ao_divergence_rsi.py",
+    "費波那契黃金區域": "fib_golden_zone.py",
     "均線交叉": "ma_cross.py",
     "RSI 均值回歸": "rsi_reversion.py",
     "布林通道均值回歸": "bollinger_reversion.py",
