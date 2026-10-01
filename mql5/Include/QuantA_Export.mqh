@@ -24,6 +24,7 @@ input bool QA_ExportEnabled = true;   // QuantA：回測結束時輸出結果
 string   qa_ea_name    = "";
 string   qa_note       = "";   // 選用：這次改了什麼（會顯示在研究紀錄、改良對比）
 string   qa_variant    = "";   // 選用：模式標籤，會顯示在紀錄名稱（例如對照實驗的各組）
+string   qa_symbol     = "";   // 選用：商品標籤（多商品 EA 用，例如「7 個商品」），預設 = 圖表商品
 double   qa_init_cash  = 0.0;
 bool     qa_inited     = false;
 bool     qa_exported   = false;
@@ -122,6 +123,7 @@ void QA_Init(string ea_name = "")
    qa_exported  = false;
    qa_variant   = "";
    qa_note      = "";
+   qa_symbol    = "";
    ArrayResize(qa_eq_t, 0, 100000);
    ArrayResize(qa_eq_v, 0, 100000);
    ArrayResize(qa_bal_v, 0, 100000);
@@ -137,6 +139,13 @@ void QA_Variant(string label) { qa_variant = label; }
 //| 選用：在 QA_Init 之後呼叫，寫下這次改了什麼（例如「加了 H4 趨勢過濾」）      |
 //+------------------------------------------------------------------+
 void QA_Note(string note) { qa_note = note; }
+
+//+------------------------------------------------------------------+
+//| 選用：多商品 EA 用，紀錄上的商品欄改成這個標籤（每筆交易仍記錄自己的商品）    |
+//+------------------------------------------------------------------+
+void QA_SymbolLabel(string label) { qa_symbol = label; }
+
+string QA_SymbolName() { return (qa_symbol == "") ? _Symbol : qa_symbol; }
 
 //+------------------------------------------------------------------+
 //| 每個 tick：在 OnTick() 第一行呼叫（每根新 K 棒記一次淨值）              |
@@ -365,7 +374,7 @@ bool QA_Export()
 
    FolderCreate(QA_FOLDER, FILE_COMMON);
    MathSrand(GetTickCount());
-   string base = qa_ea_name + "_" + _Symbol + "_" + QA_TF() + "_" + IntegerToString((long)GetTickCount())
+   string base = qa_ea_name + "_" + QA_SymbolName() + "_" + QA_TF() + "_" + IntegerToString((long)GetTickCount())
                  + "_" + IntegerToString(MathRand());
    StringReplace(base, " ", "_");
    StringReplace(base, "/", "-");
@@ -380,10 +389,10 @@ bool QA_Export()
       return false;
      }
 
-   string name = qa_ea_name + (qa_variant == "" ? "" : " [" + qa_variant + "]") + " · " + _Symbol + " · " + QA_TF();
+   string name = qa_ea_name + (qa_variant == "" ? "" : " [" + qa_variant + "]") + " · " + QA_SymbolName() + " · " + QA_TF();
    FileWriteString(h, "{\"version\": 1, \"id\": \"\", \"created\": \"\", \"source\": \"mt5\"");
    FileWriteString(h, ", \"name\": " + QA_Str(name) + ", \"ea\": " + QA_Str(qa_ea_name));
-   FileWriteString(h, ", \"symbol\": " + QA_Str(_Symbol) + ", \"timeframe\": " + QA_Str(QA_TF()));
+   FileWriteString(h, ", \"symbol\": " + QA_Str(QA_SymbolName()) + ", \"timeframe\": " + QA_Str(QA_TF()));
    FileWriteString(h, ", \"cash\": " + QA_Num(qa_init_cash));
    FileWriteString(h, ", \"params\": {" + qa_params + "}");
    FileWriteString(h, ", \"note\": " + QA_Str(qa_note));

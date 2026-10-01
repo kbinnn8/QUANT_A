@@ -13,11 +13,14 @@
 //|   背離 + RSI（完整版）／只有背離／只有 RSI／隨機進場                   |
 //| 只有 RSI、隨機進場的停損放在最近 7 根 K 棒的高低點外 0.5 倍 ATR。        |
 //|                                                                  |
-//| 與 QUANT_A 快速測試的 Python 版（ao_divergence_rsi.py）規則逐條相同，  |
+//| 多商品：在「商品清單」填 EURUSD,GBPUSD,… 就會在同一次測試裡，           |
+//| 對每個商品各自套用同一套規則（共用一個帳戶）；空白 = 只跑圖表商品。      |
+//|                                                                  |
+//| 與 Python 參考版（ao_divergence_rsi.py）規則逐條相同，                 |
 //| 隨機進場用同一個雜湊公式：同一根 K 棒、同一個種子會得到同一個亂數。      |
 //+------------------------------------------------------------------+
 #property copyright   "QUANT_A"
-#property version     "1.10"
+#property version     "1.20"
 #property description "AO 背離 + RSI 極端（B 版），含對照實驗模式"
 
 #include <Trade\Trade.mqh>
@@ -30,6 +33,10 @@ enum ENUM_ENTRY_MODE
    ENTRY_RSI_ONLY = 2,   // 只有 RSI（剛進入 20 / 80 就進場）
    ENTRY_RANDOM   = 3    // 隨機進場（沒有優勢的基準）
   };
+
+input group "=== 商品 ==="
+input string InpSymbols       = "EURUSD,GBPUSD,USDJPY,AUDUSD,USDCAD,USDCHF,NZDUSD"; // 商品清單（逗號分隔；空白 = 只跑圖表商品）
+input int    InpMaxOpen       = 0;        // 所有商品合計最多同時幾筆部位（0 = 不限）
 
 input group "=== 進場模式（對照實驗）==="
 input ENUM_ENTRY_MODE InpEntryMode = ENTRY_DIV_RSI; // 進場模式
@@ -62,11 +69,19 @@ input bool   InpEnableTrading = false;    // 實盤自動下單（策略測試�
 input ulong  InpMagic         = 20261002; // EA 識別碼
 input string InpNote          = "";       // 備註：這次改了什麼（會顯示在研究紀錄）
 
+// 每個商品各自的指標與狀態
+struct SymState
+  {
+   string   name;
+   int      hAO;
+   int      hRSI;
+   int      hATR;
+   datetime last_bar;
+  };
+
 CTrade   trade;
-int      hAO  = INVALID_HANDLE;
-int      hRSI = INVALID_HANDLE;
-int      hATR = INVALID_HANDLE;
-datetime last_bar = 0;
+SymState S[];
+int      nsym = 0;
 
 //+------------------------------------------------------------------+
 string ModeLabel()
@@ -89,19 +104,17 @@ int OnInit()
       Print("參數錯誤：擺動點左右至少 1 根，且最多相隔要大於最少相隔");
       return(INIT_PARAMETERS_INCORRECT);
      }
-   hAO  = iAO(_Symbol, _Period);
-   hRSI = iRSI(_Symbol, _Period, InpRSIPeriod, PRICE_CLOSE);
-   hATR = iATR(_Symbol, _Period, InpATRPeriod);
-   if(hAO == INVALID_HANDLE || hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE)
-     {
-      Print("建立指標失敗，錯誤碼：", GetLastError());
+   if(!SetupSymbols())
       return(INIT_FAILED);
-     }
    trade.SetExpertMagicNumber(InpMagic);
+   EventSetTimer(60);                     // 非圖表商品也能準時檢查新 K 棒
 
    QA_Init("AO_Div_RSI");                 // ★ QUANT_A：登記參數（名稱和 Python 版一樣）
    QA_Variant(ModeLabel());
    QA_Note(InpNote);
+   if(nsym > 1)
+      QA_SymbolLabel(IntegerToString(nsym) + " 個商品");
+   QA_Param("symbols", SymbolList());
    QA_Param("entry_mode", (int)InpEntryMode);
    QA_Param("random_prob", InpRandomProb);
    QA_Param("seed", InpSeed);
@@ -125,9 +138,13 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
-   if(hAO  != INVALID_HANDLE) IndicatorRelease(hAO);
-   if(hRSI != INVALID_HANDLE) IndicatorRelease(hRSI);
-   if(hATR != INVALID_HANDLE) IndicatorRelease(hATR);
+   EventKillTimer();
+   for(int i = 0; i < nsym; i++)
+     {
+      if(S[i].hAO  != INVALID_HANDLE) IndicatorRelease(S[i].hAO);
+      if(S[i].hRSI != INVALID_HANDLE) IndicatorRelease(S[i].hRSI);
+      if(S[i].hATR != INVALID_HANDLE) IndicatorRelease(S[i].hATR);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -145,17 +162,100 @@ bool TradingOn()
    return(InpEnableTrading || MQLInfoInteger(MQL_TESTER) != 0);
   }
 
-bool HasMyPosition()
+// 解析商品清單並建立每個商品的指標；找不到的商品會試著加上圖表商品的後綴（例如 EURUSD → EURUSD#）
+bool SetupSymbols()
+  {
+   string list[];
+   int n = 0;
+   if(StringLen(InpSymbols) > 0)
+      n = StringSplit(InpSymbols, ',', list);
+   if(n <= 0)
+     {
+      ArrayResize(list, 1);
+      list[0] = _Symbol;
+      n = 1;
+     }
+   string suffix = (StringLen(_Symbol) > 6) ? StringSubstr(_Symbol, 6) : "";
+   ArrayResize(S, 0);
+   nsym = 0;
+   for(int k = 0; k < n; k++)
+     {
+      string name = list[k];
+      StringTrimLeft(name);
+      StringTrimRight(name);
+      if(name == "")
+         continue;
+      if(!SymbolSelect(name, true))
+        {
+         if(suffix != "" && SymbolSelect(name + suffix, true))
+            name = name + suffix;
+         else
+           {
+            Print("找不到商品，略過：", name);
+            continue;
+           }
+        }
+      bool dup = false;
+      for(int j = 0; j < nsym; j++)
+         if(S[j].name == name)
+            dup = true;
+      if(dup)
+         continue;
+      ArrayResize(S, nsym + 1);
+      S[nsym].name     = name;
+      S[nsym].hAO      = iAO(name, _Period);
+      S[nsym].hRSI     = iRSI(name, _Period, InpRSIPeriod, PRICE_CLOSE);
+      S[nsym].hATR     = iATR(name, _Period, InpATRPeriod);
+      S[nsym].last_bar = 0;
+      if(S[nsym].hAO == INVALID_HANDLE || S[nsym].hRSI == INVALID_HANDLE || S[nsym].hATR == INVALID_HANDLE)
+        {
+         Print("建立指標失敗：", name, "，錯誤碼：", GetLastError());
+         return(false);
+        }
+      nsym++;
+     }
+   if(nsym == 0)
+     {
+      Print("商品清單裡沒有可用的商品");
+      return(false);
+     }
+   PrintFormat("AO_Div_RSI：%d 個商品（%s），週期 %s", nsym, SymbolList(), EnumToString(_Period));
+   return(true);
+  }
+
+string SymbolList()
+  {
+   string s = "";
+   for(int i = 0; i < nsym; i++)
+      s += (i > 0 ? "," : "") + S[i].name;
+   return(s);
+  }
+
+bool HasMyPosition(string sym)
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
       ulong ticket = PositionGetTicket(i);
       if(ticket == 0)
          continue;
-      if(PositionGetString(POSITION_SYMBOL) == _Symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic)
+      if(PositionGetString(POSITION_SYMBOL) == sym && (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic)
          return(true);
      }
    return(false);
+  }
+
+int CountMyPositions()
+  {
+   int c = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket == 0)
+         continue;
+      if((ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic)
+         c++;
+     }
+   return(c);
   }
 
 // 陣列為時間序列（索引 0 = 正在形成的 K 棒，1 = 剛收盤的 K 棒，數字越大越舊）
@@ -239,13 +339,13 @@ double BarRandom(datetime t, int seed, bool &go_long)
   }
 
 // 依風險計算手數：停損時虧掉淨值的 InpRiskPct%，名目金額不超過淨值 × InpMaxLeverage
-double CalcLots(double risk_price, double price)
+double CalcLots(string sym, double risk_price, double price)
   {
-   double vmin  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-   double vmax  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-   double vstep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-   double tv    = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double ts    = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double vmin  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double vmax  = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double vstep = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   double tv    = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
+   double ts    = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
    double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
    double lots  = InpFixedLots;
    if(InpRiskPct > 0.0)
@@ -264,7 +364,7 @@ double CalcLots(double risk_price, double price)
       lots = MathFloor(lots / vstep + 1e-9) * vstep;
    if(lots < vmin)
      {
-      Print("算出的手數低於最小手數，略過這個訊號");
+      Print(sym, "：算出的手數低於最小手數，略過這個訊號");
       return(0.0);
      }
    int vdig = (vstep > 0.0) ? (int)MathMax(0.0, MathCeil(-MathLog10(vstep) - 1e-9)) : 2;
@@ -272,23 +372,24 @@ double CalcLots(double risk_price, double price)
   }
 
 // 下單；回傳 true = 這個訊號有效（風險 > 0），不論實際有沒有下單
-bool Enter(bool is_long, double sl, string why)
+bool Enter(string sym, bool is_long, double sl, string why)
   {
-   double price = is_long ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   sl = NormalizeDouble(sl, _Digits);
+   int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double price  = is_long ? SymbolInfoDouble(sym, SYMBOL_ASK) : SymbolInfoDouble(sym, SYMBOL_BID);
+   sl = NormalizeDouble(sl, digits);
    double risk = is_long ? price - sl : sl - price;
    if(risk <= 0.0)
       return(false);
-   PrintFormat("%s 訊號：%s，價格 %.5f，停損 %.5f", ModeLabel(), why, price, sl);
+   PrintFormat("%s %s 訊號：%s，價格 %.5f，停損 %.5f", sym, ModeLabel(), why, price, sl);
    if(!TradingOn())
       return(true);
-   double tp   = NormalizeDouble(is_long ? price + InpRR * risk : price - InpRR * risk, _Digits);
-   double lots = CalcLots(risk, price);
+   double tp   = NormalizeDouble(is_long ? price + InpRR * risk : price - InpRR * risk, digits);
+   double lots = CalcLots(sym, risk, price);
    if(lots <= 0.0)
       return(true);
-   bool ok = is_long ? trade.Buy(lots, _Symbol, price, sl, tp, why) : trade.Sell(lots, _Symbol, price, sl, tp, why);
+   bool ok = is_long ? trade.Buy(lots, sym, price, sl, tp, why) : trade.Sell(lots, sym, price, sl, tp, why);
    if(!ok)
-      Print(is_long ? "買單失敗：" : "賣單失敗：", trade.ResultRetcodeDescription());
+      Print(sym, is_long ? " 買單失敗：" : " 賣單失敗：", trade.ResultRetcodeDescription());
    return(true);
   }
 
@@ -296,9 +397,24 @@ bool Enter(bool is_long, double sl, string why)
 void OnTick()
   {
    QA_OnTick();                           // ★ QUANT_A：記錄淨值
+   for(int i = 0; i < nsym; i++)
+      ProcessSymbol(i);
+  }
 
-   datetime bar = iTime(_Symbol, _Period, 0);
-   if(bar == last_bar)
+void OnTimer()
+  {
+   for(int i = 0; i < nsym; i++)
+      ProcessSymbol(i);
+  }
+
+//+------------------------------------------------------------------+
+//| 一個商品：只在它自己的新 K 棒開盤時判斷一次                            |
+//+------------------------------------------------------------------+
+void ProcessSymbol(int i)
+  {
+   string   sym = S[i].name;
+   datetime bar = iTime(sym, _Period, 0);
+   if(bar == 0 || bar == S[i].last_bar)
       return;
 
    int need = 1 + InpPivotRight + InpMaxGap + InpPivotLeft + 2;
@@ -308,15 +424,17 @@ void OnTick()
    ArraySetAsSeries(ao, true);
    ArraySetAsSeries(rsi, true);
    ArraySetAsSeries(atr, true);
-   if(CopyLow(_Symbol, _Period, 0, need, lo) != need) return;
-   if(CopyHigh(_Symbol, _Period, 0, need, hi) != need) return;
-   if(CopyBuffer(hAO, 0, 0, need, ao) != need) return;
-   if(CopyBuffer(hRSI, 0, 0, need, rsi) != need) return;
-   if(CopyBuffer(hATR, 0, 0, 2, atr) != 2) return;
-   last_bar = bar;
+   if(CopyLow(sym, _Period, 0, need, lo) != need) return;
+   if(CopyHigh(sym, _Period, 0, need, hi) != need) return;
+   if(CopyBuffer(S[i].hAO, 0, 0, need, ao) != need) return;
+   if(CopyBuffer(S[i].hRSI, 0, 0, need, rsi) != need) return;
+   if(CopyBuffer(S[i].hATR, 0, 0, 2, atr) != 2) return;
+   S[i].last_bar = bar;
 
-   if(HasMyPosition())
-      return;                             // 一次只持有一個部位，出場只靠停損 / 停利
+   if(HasMyPosition(sym))
+      return;                             // 每個商品一次只持有一個部位，出場只靠停損 / 停利
+   if(InpMaxOpen > 0 && CountMyPositions() >= InpMaxOpen)
+      return;
    if(atr[1] == EMPTY_VALUE || atr[1] <= 0.0)
       return;
 
@@ -328,10 +446,10 @@ void OnTick()
       int  s2      = 1 + InpPivotRight;     // 剛好在上一根收盤時被確認的擺動點
       bool use_rsi = (InpEntryMode == ENTRY_DIV_RSI);
       if(InpAllowLong && Divergence(lo, ao, rsi, s2, need, true, use_rsi))
-         if(Enter(true, lo[s2] - buf, use_rsi ? StringFormat("看漲背離 RSI<=%.0f", InpRSILow) : "看漲背離"))
+         if(Enter(sym, true, lo[s2] - buf, use_rsi ? StringFormat("看漲背離 RSI<=%.0f", InpRSILow) : "看漲背離"))
             return;
       if(InpAllowShort && Divergence(hi, ao, rsi, s2, need, false, use_rsi))
-         Enter(false, hi[s2] + buf, use_rsi ? StringFormat("看跌背離 RSI>=%.0f", InpRSIHigh) : "看跌背離");
+         Enter(sym, false, hi[s2] + buf, use_rsi ? StringFormat("看跌背離 RSI>=%.0f", InpRSIHigh) : "看跌背離");
       return;
      }
 
@@ -346,23 +464,23 @@ void OnTick()
       if(r == EMPTY_VALUE || r0 == EMPTY_VALUE)
          return;
       if(InpAllowLong && r <= InpRSILow && InpRSILow < r0)
-         if(Enter(true, sl_long, StringFormat("RSI 跌破 %.0f", InpRSILow)))
+         if(Enter(sym, true, sl_long, StringFormat("RSI 跌破 %.0f", InpRSILow)))
             return;
       if(InpAllowShort && r >= InpRSIHigh && InpRSIHigh > r0)
-         Enter(false, sl_short, StringFormat("RSI 突破 %.0f", InpRSIHigh));
+         Enter(sym, false, sl_short, StringFormat("RSI 突破 %.0f", InpRSIHigh));
       return;
      }
 
    if(InpEntryMode == ENTRY_RANDOM)       // 隨機進場
      {
       bool   go_long = false;
-      double u = BarRandom(iTime(_Symbol, _Period, 1), InpSeed, go_long);
+      double u = BarRandom(iTime(sym, _Period, 1), InpSeed, go_long);
       if(u < InpRandomProb)
         {
          if(go_long && InpAllowLong)
-            Enter(true, sl_long, "隨機做多");
+            Enter(sym, true, sl_long, "隨機做多");
          else if(!go_long && InpAllowShort)
-            Enter(false, sl_short, "隨機做空");
+            Enter(sym, false, sl_short, "隨機做空");
         }
      }
   }
