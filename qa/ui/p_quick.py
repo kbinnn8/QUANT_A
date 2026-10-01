@@ -129,10 +129,17 @@ def render():
                     params[name] = float(c.number_input(name, value=float(default), step=step, format="%g", key=key))
                 else:
                     params[name] = c.text_input(name, value=str(default), key=key)
-        start_clicked = st.button("▶  開始回測", type="primary", key="qt_start", use_container_width=True) \
-            if not _has_width() else st.button("▶  開始回測", type="primary", key="qt_start", width="stretch")
+        experiment = getattr(cls, "experiment", None) or []
+        if experiment:
+            b1, b2 = st.columns([1, 1])
+            start_clicked = _wide_button(b1, "▶  開始回測", "qt_start", primary=True)
+            exp_clicked = _wide_button(b2, f"對照實驗（{len(experiment)} 組）", "qt_exp", icon=":material/science:",
+                                       help="同樣的出場規則，只換進場方式各跑一次（含隨機進場基準），跑完直接並排比較。"
+                                            "用的是上面這組參數，只覆蓋實驗要改的那幾個。")
+        else:
+            start_clicked, exp_clicked = _wide_button(st, "▶  開始回測", "qt_start", primary=True), False
 
-    if start_clicked:
+    if start_clicked or exp_clicked:
         try:
             data, used = cached_ohlcv(symbol, start, today + dt.timedelta(days=1), interval)
         except Exception as e:
@@ -142,17 +149,23 @@ def render():
             st.error(f"抓不到 {symbol} 的{iv}資料。")
             return
         opts = dict(slippage_bps=slip, sizing_mode="淨值比例", sizing_value=size, lot_size=0)
+        variants = [{**params, **ov} for ov in experiment] if exp_clicked else [params]
+        ids = []
         try:
-            with st.spinner("回測中…"):
-                res = engine.run(cls, data, params, cash, comm, **opts)
-                res["lookahead"] = engine.lookahead_check(cls, data, params, cash, comm, **opts)
+            with st.spinner("回測中…" if len(variants) == 1 else f"對照實驗：共 {len(variants)} 組，回測中…"):
+                for p in variants:
+                    res = engine.run(cls, data, p, cash, comm, **opts)
+                    res["lookahead"] = engine.lookahead_check(cls, data, p, cash, comm, **opts)
+                    run = R.from_engine(res, cls.__name__, used, iv, name=_run_name(cls, p, used, iv))
+                    run.settings = {**run.settings, "期間": years}
+                    S.add_run(run)
+                    ids.append(run.id)
         except engine.StrategyError as e:
             st.error(f"回測時發生錯誤：\n\n```\n{e}\n```")
             return
-        run = R.from_engine(res, cls.__name__, used, iv)
-        run.settings = {**run.settings, "期間": years}
-        S.add_run(run)
-        st.session_state["qt_last"] = run.id
+        st.session_state["qt_last"] = ids[0]
+        if exp_clicked:
+            S.compare(ids)
 
     last = st.session_state.get("qt_last")
     lib = S.library()
@@ -180,6 +193,28 @@ def render():
                            mime="application/json", key="qt_dl")
         st.markdown('<div class="hint">這筆結果已加入「研究紀錄」（這次連線有效）。想永久保存，可以下載後交給我放進 repo 的 runs/ 資料夾。</div>',
                     unsafe_allow_html=True)
+
+
+def _run_name(cls, params, symbol, iv) -> str:
+    """策略可以定義 variant(params) 回傳模式標籤，會顯示在紀錄名稱裡（例如對照實驗的各組）。"""
+    label = ""
+    fn = getattr(cls, "variant", None)
+    if callable(fn):
+        try:
+            label = str(fn(params) or "")
+        except Exception:
+            label = ""
+    ea = cls.__name__ + (f" [{label}]" if label else "")
+    return f"{ea} · {symbol} · {iv}"
+
+
+def _wide_button(where, label, key, primary=False, help=None, icon=None):
+    kw = dict(type="primary" if primary else "secondary", key=key, help=help)
+    if icon:
+        kw["icon"] = icon
+    if _has_width():
+        return where.button(label, width="stretch", **kw)
+    return where.button(label, use_container_width=True, **kw)
 
 
 def _has_width() -> bool:

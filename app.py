@@ -35,6 +35,11 @@ def password_gate():
 
 password_gate()
 
+# 換頁時 Streamlit 會清掉沒顯示的元件值；把快速測試的設定重新存一次，回來時參數不會被重設
+_KEEP = ("qt_tpl", "qt_sym", "qt_iv", "qt_years", "qt_custom", "qt_cash", "qt_size", "qt_comm", "qt_slip", "qt_p::")
+for _k in [k for k in st.session_state if isinstance(k, str) and k.startswith(_KEEP)]:
+    st.session_state[_k] = st.session_state[_k]
+
 pages = {
     "研究紀錄": st.Page(p_runs.render, title="研究紀錄", icon=":material/list_alt:", url_path="runs", default=True),
     "回測分析": st.Page(p_analysis.render, title="回測分析", icon=":material/insights:", url_path="analysis"),
