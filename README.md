@@ -21,7 +21,18 @@ qa/ta.py               技術指標
 qa/templates/          策略範本
 qa/ui/                 介面（theme 採 TradingView 深色配色）
 runs/                  永久保存的回測紀錄
+mql5/Include/QuantA_Export.mqh   MT5 匯出模組（EA 加 4 行就能把回測結果輸出給 app）
+mql5/Experts/QuantA/             測試用 EA
+bridge/quanta_uploader.py        電腦端上傳小程式（監看 MT5 共用資料夾 → GitHub runs/）
 ```
+
+## MT5 → app 自動上傳
+1. EA 引入 `QuantA_Export.mqh`，在 `OnInit` 呼叫 `QA_Init` / `QA_Param`、`OnTick` 第一行 `QA_OnTick()`、`OnTester` 呼叫 `QA_Export()`
+2. 單次回測結束時，EA 把結果寫到 `%APPDATA%\MetaQuotes\Terminal\Common\Files\QuantA\`
+3. 上傳小程式（只用 Python 標準函式庫）把檔案上傳到這個 repo 的 `runs/`
+4. Streamlit 偵測到 repo 更新，`研究紀錄`就會出現這筆回測
+
+MetaEditor 用的檔案請用 UTF-16 存（安裝包裡已經轉好），否則中文註解可能變亂碼。
 
 ## 安全
 快速測試會在伺服器上執行策略程式碼：請把 Streamlit app 設為私人，或在 Secrets 設定 `APP_PASSWORD`。

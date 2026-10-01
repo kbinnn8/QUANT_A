@@ -77,8 +77,12 @@ def cost_sensitivity(trades: pd.DataFrame, extra_bps=None) -> tuple[pd.DataFrame
     """每一邊多付 X bp（進場 + 出場各一次，按成交金額計）後的淨利。回傳（表, 損益兩平的額外成本 bp）。"""
     if extra_bps is None:
         extra_bps = [0, 1, 2, 3, 5, 7.5, 10, 15, 20, 30]
-    qty = trades["數量"].to_numpy(float)
-    notional = qty * (trades["進場價"].to_numpy(float) + trades["出場價"].to_numpy(float))
+    if "名目金額" in trades and trades["名目金額"].notna().all():
+        # MT5：EA 已經用帳戶幣別算好名目金額（USD/JPY 這類報價幣別不同的商品也正確）
+        notional = 2 * trades["名目金額"].to_numpy(float)
+    else:
+        qty = trades["數量"].to_numpy(float)
+        notional = qty * (trades["進場價"].to_numpy(float) + trades["出場價"].to_numpy(float))
     base = float(trades["損益"].sum())
     per_bp = float(notional.sum()) / 1e4
     rows = [dict(額外成本bp=b, 淨利=base - b * per_bp) for b in extra_bps]
